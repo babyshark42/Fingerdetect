@@ -2,7 +2,7 @@ import cv2
 import cv2.aruco as aruco
 import sys  # 1. เพิ่มบรรทัดนี้
 
-# 2. เพิ่มบรรทัดนี้เพื่อบังคับให้ Terminal พิมพ์ภาษาไทยได้
+# บังคับให้ Terminal พิมพ์ภาษาไทยได้
 sys.stdout.reconfigure(encoding='utf-8')
 # 1. กำหนดรูปแบบ Dictionary (ใช้แบบ 4x4 จำนวน 50 ลาย ซึ่งสแกนง่ายและแม่นยำ)
 aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
