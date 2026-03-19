@@ -9,8 +9,8 @@ import glob
 # ==========================================
 SQUARES_X = 5         # จำนวนช่องตารางแนวนอน
 SQUARES_Y = 7         # จำนวนช่องตารางแนวตั้ง
-SQUARE_LENGTH = 0.04 # ความยาวช่องตาราง 1 ช่อง (หน่วยเป็น เมตร) -> เปลี่ยนตามที่วัดจริง!
-MARKER_LENGTH = 0.03 # ความยาว Marker สีดำด้านใน (หน่วยเป็น เมตร) -> เปลี่ยนตามที่วัดจริง!
+SQUARE_LENGTH = 0.035 # ความยาวช่องตาราง 1 ช่อง (หน่วยเป็น เมตร) -> เปลี่ยนตามที่วัดจริง!
+MARKER_LENGTH = 0.026 # ความยาว Marker สีดำด้านใน (หน่วยเป็น เมตร) -> เปลี่ยนตามที่วัดจริง!
 
 # โฟลเดอร์ที่เก็บรูปถ่าย
 DIR_LEFT = "calibration_data/left"
@@ -158,7 +158,7 @@ R1, R2, P1, P2, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
 np.savez(OUTPUT_FILE, 
          mtx_L=mtx_L, dist_L=dist_L, 
          mtx_R=mtx_R, dist_R=dist_R, 
-         R=R, T=T, P1=P1, P2=P2)
+         R=R, T=T, R1=R1, R2=R2, P1=P1, P2=P2)
 
 print("-" * 50)
 print(f"💾 บันทึกไฟล์ตั้งค่ากล้องสำเร็จที่: {OUTPUT_FILE}")
