@@ -276,13 +276,19 @@ def run_3d_tracker(l_id, r_id):
                     cv2.putText(frame, str(idx), (px+5, py-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,0,0), 1)
         return frame, keypoints
 
-    # เตรียม Matplotlib 3D View
+    # เตรียม Matplotlib 3D View แบบหลายมุมมอง
     plt.ion()
-    fig = plt.figure("3D Skeleton Viewer", figsize=(8, 8))
-    ax = fig.add_subplot(111, projection='3d')
+    fig = plt.figure("3D Skeleton Viewer", figsize=(15, 5))
+    ax1 = fig.add_subplot(131, projection='3d') # มุมมองหลัก 3D
+    ax2 = fig.add_subplot(132, projection='3d') # มุมมองด้านบน (Top View)
+    ax3 = fig.add_subplot(133, projection='3d') # มุมมองด้านข้าง (Side View)
 
     print("\n--- เริ่ม 3D Skeleton Tracking ---")
-    print("กด 'Q' ที่หน้าต่างกล้องเพื่อออก")
+    print("กด 'Q' ที่หน้าต่างกล้องเพื่อออก หรือกดกากบาท (X) เพื่อปิด")
+    
+    # สร้างหน้าต่าง OpenCV ไว้ล่วงหน้าเพื่อใช้เช็คสถานะ
+    cv_window_name = "3. Tracking Cameras (Left | Right)"
+    cv2.namedWindow(cv_window_name)
 
     while True:
         ret_l, frame_l = cam_l.read()
@@ -305,48 +311,76 @@ def run_3d_tracker(l_id, r_id):
                 pt_4d = cv2.triangulatePoints(P1, P2, pt_l.T, pt_r.T)
                 pt_3d_cam = pt_4d[:3] / pt_4d[3] # แปลงเป็น 3D พิกัดกล้องซ้าย
                 
-                # นำไปอิงระนาบพื้นโลก (Z=0 คือพื้น)
+                # นำไปอิงระนาบพื้นโลก
                 pt_world = R_floor_inv @ (pt_3d_cam - tvec_floor)
-                pts_3d_world[idx] = pt_world.flatten()
+                xw, yw, zw = pt_world.flatten()
+                
+                # 🌟 สลับและปรับทิศทางแกนสำหรับ Matplotlib 🌟
+                pts_3d_world[idx] = [xw, yw, -zw]
 
-        # 3. วาดกราฟ 3D
-        ax.clear()
-        
-        # ตั้งค่ามุมมองและความกว้าง (ปรับได้ตามความกว้างของห้อง)
-        ax.set_xlim([-1.0, 1.0])  # แกน X (ซ้าย-ขวา) 2 เมตร
-        ax.set_ylim([-1.0, 1.0])  # แกน Y (หน้า-หลัง) 2 เมตร
-        ax.set_zlim([0, -2.0])     # แกน Z (ความสูง) จากพื้น 0 ถึง 2 เมตร
-        
-        ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)'); ax.set_zlabel('Height Z (m)')
-        ax.set_title("3D Human Skeleton Tracker")
-        
-        # มุมมองภาพ 3D
-        ax.view_init(elev=10, azim=45) 
+        # 3. วาดกราฟ 3D ทั้ง 3 มุมมอง
+        views = [
+            {"ax": ax1, "title": "Main 3D View", "elev": 15, "azim": 45},
+            {"ax": ax2, "title": "Top View (X-Y)", "elev": 90, "azim": -90},
+            {"ax": ax3, "title": "Side View (Y-Z)", "elev": 0, "azim": 0}
+        ]
 
-        # พล็อตจุด
-        for idx, pt in pts_3d_world.items():
-            ax.scatter(pt[0], pt[1], pt[2], color='red', s=40)
-            ax.text(pt[0], pt[1], pt[2], f'{idx}', fontsize=8)
+        for v in views:
+            ax = v["ax"]
+            ax.clear()
+            
+            # ตั้งค่าขอบเขตความกว้าง-ยาวของกราฟ
+            ax.set_xlim([-1.0, 1.0])  # แกน X (ซ้าย-ขวา) 
+            ax.set_ylim([-1.0, 1.0])  # แกน Y (หน้า-หลัง/ความลึก)
+            ax.set_zlim([-0.5, 2.0])  # แกน Z (ความสูง) เผื่อติดลบนิดหน่อย
+            
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Depth Y (m)')
+            ax.set_zlabel('Height Z (m)')
+            ax.set_title(v["title"])
+            
+            # ปรับองศามุมกล้องของแต่ละแกน
+            ax.view_init(elev=v["elev"], azim=v["azim"])
 
-        # พล็อตเส้นเชื่อม (กระดูก)
-        for (idx1, idx2) in SKELETON_CONNECTIONS:
-            if idx1 in pts_3d_world and idx2 in pts_3d_world:
-                p1, p2 = pts_3d_world[idx1], pts_3d_world[idx2]
-                ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='blue', linewidth=2)
+            # พล็อตจุดข้อต่อ
+            for idx, pt in pts_3d_world.items():
+                ax.scatter(pt[0], pt[1], pt[2], color='red', s=40)
+                # ใส่ตัวเลขกำกับจุดเฉพาะหน้าต่างหลัก 3D เพื่อไม่ให้จออื่นดูรกเกินไป
+                if ax == ax1:
+                    ax.text(pt[0], pt[1], pt[2], f'{idx}', fontsize=8)
+
+            # พล็อตเส้นเชื่อม (กระดูก)
+            for (idx1, idx2) in SKELETON_CONNECTIONS:
+                if idx1 in pts_3d_world and idx2 in pts_3d_world:
+                    p1, p2 = pts_3d_world[idx1], pts_3d_world[idx2]
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='blue', linewidth=2)
 
         plt.draw()
         plt.pause(0.001)
 
         # วิดีโอสตรีม
         display = cv2.hconcat([cv2.resize(frame_l, (400, 300)), cv2.resize(frame_r, (400, 300))])
-        cv2.imshow("3. Tracking Cameras (Left | Right)", display)
+        cv2.imshow(cv_window_name, display)
 
-        if cv2.waitKey(1) & 0xFF in (ord('q'), 27): break
+        # ==========================================
+        # เงื่อนไขการออกจากโปรแกรม (แก้ใหม่)
+        # ==========================================
+        # 1. เช็คว่ากด Q หรือ ESC ไหม
+        if cv2.waitKey(1) & 0xFF in (ord('q'), 27): 
+            break
+            
+        # 2. เช็คว่าหน้าต่าง OpenCV โดนกดกากบาทปิดไปหรือยัง
+        if cv2.getWindowProperty(cv_window_name, cv2.WND_PROP_VISIBLE) < 1:
+            break
+            
+        # 3. เช็คว่าหน้าต่างกราฟ 3D (Matplotlib) โดนกดกากบาทปิดไปหรือยัง
+        if not plt.fignum_exists(fig.number):
+            break
 
     cam_l.release(); cam_r.release()
     cv2.destroyAllWindows()
     plt.ioff()
-    plt.close()
+    plt.close('all') # ปิดหน้าต่างกราฟทั้งหมดให้ชัวร์
 
 # ==========================================
 # 6. Main GUI Menu
