@@ -43,20 +43,14 @@ def render_3d_skeleton(points_3d_dict, w=640, h=640):
         cv2.putText(img, "Waiting for Stereo Vision...", (100, h//2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         return img
 
-    # 1. พลิกแกน Y ทันที! (เพราะสมการภาพ Y ลงล่าง แต่ 3D ทั่วไป Y ต้องขึ้นบน)
-    keys = list(points_3d_dict.keys())
-    pts_list = []
-    for idx in keys:
-        pt = points_3d_dict[idx]
-        pts_list.append([pt[0], -pt[1], pt[2]]) # 🔥 ใส่เครื่องหมายลบเพื่อกลับด้าน Y
-        
-    pts_array = np.array(pts_list)
+    # 1. คืนสมการเป็นพิกัดกล้องปกติ (Y ชี้ลงพื้น, Z ลึกเข้าไป) 
+    pts_array = np.array(list(points_3d_dict.values()))
     center = np.mean(pts_array, axis=0)
     centered_pts = pts_array - center
 
-    # 2. มุมมองกล้อง
-    theta_y = math.radians(-30) 
-    theta_x = math.radians(15)  
+    # 2. มุมมองกล้อง (ก้มลงนิดหน่อยให้เห็นมิติพื้น)
+    theta_y = math.radians(-30) # หันซ้าย/ขวา
+    theta_x = math.radians(-15) # ติดลบ = ก้มกล้องลงมองพื้น
 
     Ry = np.array([[math.cos(theta_y), 0, math.sin(theta_y)],
                    [0, 1, 0],
@@ -72,11 +66,11 @@ def render_3d_skeleton(points_3d_dict, w=640, h=640):
     def project_pt(pt):
         pt_rot = Rx @ Ry @ pt
         px = int(pt_rot[0] * scale + w / 2)
-        py = int(-pt_rot[1] * scale + h / 2) # Screen Y ลงล่าง เลยต้องสลับ
+        py = int(pt_rot[1] * scale + h / 2) # กลับมาใช้บวกปกติ เพราะ Y ลงล่าง
         return px, py
 
-    # 3. สร้างพื้น (ตอนนี้ Y พุ่งขึ้นบนแล้ว เท้าเลยเป็นจุดที่ค่า Y ต่ำที่สุด/min)
-    floor_y = np.min(centered_pts[:, 1]) - (max_dist * 0.1) 
+    # 3. สร้างพื้น (ตอนนี้ Y ชี้ลงล่าง เท้าคือจุดที่มีค่า Y มากที่สุด/max)
+    floor_y = np.max(centered_pts[:, 1]) + (max_dist * 0.1) 
     
     grid_size = max_dist * 1.5
     grid_step = grid_size / 5
@@ -96,7 +90,7 @@ def render_3d_skeleton(points_3d_dict, w=640, h=640):
     axis_len = grid_size * 0.6
     p_org = project_pt(np.array([0, floor_y, 0]))
     p_x = project_pt(np.array([axis_len, floor_y, 0]))
-    p_y = project_pt(np.array([0, floor_y + axis_len, 0])) # Y บวก พุ่งขึ้นบน!
+    p_y = project_pt(np.array([0, floor_y - axis_len, 0])) # วาดแกน Y ชี้ขึ้นฟ้าไปหาหัว (ค่าติดลบ)
     p_z = project_pt(np.array([0, floor_y, axis_len]))
 
     cv2.line(img, p_org, p_x, (0, 0, 255), 2) # X = แดง
@@ -109,8 +103,8 @@ def render_3d_skeleton(points_3d_dict, w=640, h=640):
 
     # 5. วาดจุด Skeleton
     projected = {}
-    for i, idx in enumerate(keys):
-        projected[idx] = project_pt(centered_pts[i])
+    for idx, pt in points_3d_dict.items():
+        projected[idx] = project_pt(pt - center)
 
     for connection in mp.solutions.pose.POSE_CONNECTIONS:
         start_idx, end_idx = connection
