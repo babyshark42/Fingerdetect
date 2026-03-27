@@ -8,6 +8,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import subprocess
 import mediapipe as mp # นำเข้า MediaPipe สำหรับจับ Skeleton
+import asyncio
+import websockets
+import json
+import threading
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -219,6 +223,46 @@ def run_floor_calibration(l_id):
     cv2.destroyAllWindows()
 
 # ==========================================
+# 4.5 ระบบ WebSocket Server (ส่งข้อมูลไป Web Browser)
+# ==========================================
+latest_skeleton_data = {
+    "persons": [],
+    "timestamp": 0
+}
+
+async def skeleton_ws_handler(websocket):
+    print("🌐 Web Client Connected!")
+    try:
+        while True:
+            # ส่งข้อมูลล่าสุดไปให้ Browser ทุกๆ ~15fps (0.066 วินาที)
+            await websocket.send(json.dumps(latest_skeleton_data))
+            await asyncio.sleep(1/15)
+    except websockets.exceptions.ConnectionClosed:
+        print("🌐 Web Client Disconnected!")
+
+# 🌟 เพิ่มการดักจับ Error กรณีพอร์ตชนกัน (อัปเดตใหม่ให้คลุม Windows)
+async def main_ws():
+    print("🚀 กำลังเปิด WebSocket Server ที่พอร์ต 8767...")
+    try:
+        async with websockets.serve(skeleton_ws_handler, "0.0.0.0", 8767):
+            print("✅ WebSocket Server รันสำเร็จแล้ว!")
+            await asyncio.Future()  # สั่งให้รันลูปค้างไว้ตลอดไป
+    except OSError as e:
+        # เช็คทั้งรหัส 10048 (Windows) และ 98 (Linux/Mac) หรือข้อความที่มี 10048
+        if e.errno in (98, 10048) or "10048" in str(e):
+            print("\n" + "="*50)
+            print("❌ [ERROR] ไม่สามารถเปิด WebSocket ได้: พอร์ต 8767 ถูกใช้งานอยู่")
+            print("❌ [วิธีแก้] กรุณาพิมพ์คำสั่งนี้ใน Terminal ทิ้งไว้ 1 รอบ:")
+            print("   👉  npx kill-port 8767")
+            print("="*50 + "\n")
+        else:
+            print(f"❌ [ERROR] WebSocket เกิดข้อผิดพลาด: {e}")
+
+def start_ws_server():
+    # สร้าง Event Loop สำหรับรัน WebSockets ใน Thread แยกด้วยวิธีใหม่
+    asyncio.run(main_ws())
+
+# ==========================================
 # 5. โมดูล 3: Real-time 3D Skeleton Tracking
 # ==========================================
 def run_3d_tracker(l_id, r_id):
@@ -257,6 +301,17 @@ def run_3d_tracker(l_id, r_id):
     cam_l = cv2.VideoCapture(l_id, cv2.CAP_DSHOW)
     cam_r = cv2.VideoCapture(r_id, cv2.CAP_DSHOW)
 
+    # 🌟 เพิ่มการเช็คว่าเปิดกล้องสำเร็จหรือไม่ 🌟
+    if not cam_l.isOpened() or not cam_r.isOpened():
+        messagebox.showerror("Error", "เปิดกล้องไม่สำเร็จ!\nกรุณาเช็ค ID กล้อง หรือตรวจสอบว่ามีโปรแกรมอื่นใช้งานกล้องอยู่หรือไม่")
+        cam_l.release()
+        cam_r.release()
+        return
+
+    # 🌟 สตาร์ท WebSocket Server แบบ Background Thread 🌟
+    ws_thread = threading.Thread(target=start_ws_server, daemon=True)
+    ws_thread.start()
+
     # ฟังก์ชันสกัดจุด 2D จากภาพ
     def get_target_keypoints(frame, pose):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -279,8 +334,13 @@ def run_3d_tracker(l_id, r_id):
     
     cv_window_name = "3. Tracking Cameras (Left | Right)"
     cv_3d_name = "3D Skeleton Views (Real-time OpenCV)"
+    cv_data_name = "WebSocket Data Stream" # 🌟 ชื่อหน้าต่างใหม่
+    
     cv2.namedWindow(cv_window_name)
     cv2.namedWindow(cv_3d_name)
+    cv2.namedWindow(cv_data_name) # 🌟 สร้างหน้าต่าง
+
+    global latest_skeleton_data # เรียกใช้ตัวแปรโกลบอลเพื่อส่งข้อมูล
 
     # ฟังก์ชันช่วยแปลงพิกัด 3D ให้อยู่ในสเกลของหน้าจอ (Pixel)
     def map_range(val, in_min, in_max, out_min, out_max):
@@ -313,6 +373,32 @@ def run_3d_tracker(l_id, r_id):
                 
                 # เก็บค่า X, Y, Z (ปรับ Z ให้ชี้ขึ้นฟ้า)
                 pts_3d_world[idx] = [xw, yw, -zw]
+
+        # ==========================================
+        # 🌟 เตรียมข้อมูล JSON Format ส่งเข้าเว็บ (ตามโครงสร้างของคุณ)
+        # ==========================================
+        if pts_3d_world:
+            keypoints_data = {}
+            for idx, pt in pts_3d_world.items():
+                keypoints_data[str(idx)] = {
+                    "x": float(pt[0]),
+                    "y": float(pt[1]),
+                    "z": float(pt[2]),
+                    "visibility": 1.0 # (สมมติว่าถ้าหาเจอ = 1.0)
+                }
+            
+            latest_skeleton_data = {
+                "persons": [{
+                    "id": 0,
+                    "keypoints": keypoints_data
+                }],
+                "timestamp": int(time.time() * 1000)
+            }
+        else:
+            latest_skeleton_data = {
+                "persons": [],
+                "timestamp": int(time.time() * 1000)
+            }
 
         # ==========================================
         # 3. วาดกราฟด้วย OpenCV ล้วนๆ (รับประกันความลื่น 60 FPS)
@@ -368,6 +454,28 @@ def run_3d_tracker(l_id, r_id):
         cv2.imshow(cv_window_name, display)
 
         # ==========================================
+        # 🌟 4. สร้างหน้าต่างสำหรับดูข้อมูล JSON (Data Stream)
+        # ==========================================
+        # สร้างกระดานสีดำ ขนาด 400x600 (กว้างxสูง)
+        data_canvas = np.zeros((600, 400, 3), dtype=np.uint8)
+        cv2.putText(data_canvas, "Sending to WebSocket (Port 8767):", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        # จัด Format JSON ให้สวยงาม (มี Indent)
+        json_str = json.dumps(latest_skeleton_data, indent=2)
+        
+        # OpenCV ไม่รองรับการขึ้นบรรทัดใหม่ (\n) ต้อง Loop ปริ้นท์ทีละบรรทัด
+        y_offset = 60
+        for line in json_str.split('\n'):
+            # ปริ้นท์ข้อความสีขาว
+            cv2.putText(data_canvas, line[:60], (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            y_offset += 20
+            if y_offset > 580: # ถ้าข้อมูลยาวเกินหน้าจอ ให้แสดง ...
+                cv2.putText(data_canvas, "...", (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                break
+                
+        cv2.imshow(cv_data_name, data_canvas)
+
+        # ==========================================
         # เงื่อนไขการออกจากโปรแกรม
         # ==========================================
         key = cv2.waitKey(1) & 0xFF
@@ -376,6 +484,9 @@ def run_3d_tracker(l_id, r_id):
         if cv2.getWindowProperty(cv_window_name, cv2.WND_PROP_VISIBLE) < 1:
             break
         if cv2.getWindowProperty(cv_3d_name, cv2.WND_PROP_VISIBLE) < 1:
+            break
+        # 🌟 เช็คว่าหน้าต่าง Data โดนกดปิดไหม
+        if cv2.getWindowProperty(cv_data_name, cv2.WND_PROP_VISIBLE) < 1:
             break
 
     cam_l.release(); cam_r.release()
