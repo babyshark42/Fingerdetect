@@ -380,10 +380,14 @@ def run_3d_tracker(l_id, r_id):
         if pts_3d_world:
             keypoints_data = {}
             for idx, pt in pts_3d_world.items():
+                # 🌟 สลับแกนให้ตรงกับ Three.js (Web 3D) 🌟
+                # Web แกน Y คือความสูง (เอา pt[2] มาใส่)
+                # Web แกน Z คือความลึก (เอา pt[1] มาใส่) 
+                # (ถ้าในเว็บคนเดินถอยหลัง ให้ลองใส่เครื่องหมายลบเป็น -float(pt[1]) ดูครับ)
                 keypoints_data[str(idx)] = {
                     "x": float(pt[0]),
-                    "y": float(pt[1]),
-                    "z": float(pt[2]),
+                    "y": float(pt[2]), 
+                    "z": float(pt[1]), 
                     "visibility": 1.0 # (สมมติว่าถ้าหาเจอ = 1.0)
                 }
             
