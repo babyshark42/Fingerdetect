@@ -1,8 +1,6 @@
 import cv2
 import cv2.aruco as aruco
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import sys
 import os
 import time
@@ -276,19 +274,17 @@ def run_3d_tracker(l_id, r_id):
                     cv2.putText(frame, str(idx), (px+5, py-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,0,0), 1)
         return frame, keypoints
 
-    # เตรียม Matplotlib 3D View แบบหลายมุมมอง
-    plt.ion()
-    fig = plt.figure("3D Skeleton Viewer", figsize=(15, 5))
-    ax1 = fig.add_subplot(131, projection='3d') # มุมมองหลัก 3D
-    ax2 = fig.add_subplot(132, projection='3d') # มุมมองด้านบน (Top View)
-    ax3 = fig.add_subplot(133, projection='3d') # มุมมองด้านข้าง (Side View)
-
     print("\n--- เริ่ม 3D Skeleton Tracking ---")
     print("กด 'Q' ที่หน้าต่างกล้องเพื่อออก หรือกดกากบาท (X) เพื่อปิด")
     
-    # สร้างหน้าต่าง OpenCV ไว้ล่วงหน้าเพื่อใช้เช็คสถานะ
     cv_window_name = "3. Tracking Cameras (Left | Right)"
+    cv_3d_name = "3D Skeleton Views (Real-time OpenCV)"
     cv2.namedWindow(cv_window_name)
+    cv2.namedWindow(cv_3d_name)
+
+    # ฟังก์ชันช่วยแปลงพิกัด 3D ให้อยู่ในสเกลของหน้าจอ (Pixel)
+    def map_range(val, in_min, in_max, out_min, out_max):
+        return int((val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
 
     while True:
         ret_l, frame_l = cam_l.read()
@@ -301,86 +297,89 @@ def run_3d_tracker(l_id, r_id):
 
         pts_3d_world = {}
 
-        # 2. Triangulate ทีละจุด (ต้องเจอจุดเดียวกันในกล้องทั้ง 2 ตัว)
+        # 2. Triangulate ทีละจุด
         for idx in TARGET_LANDMARKS:
             if idx in kps_l and idx in kps_r:
                 pt_l = np.array([[kps_l[idx][0], kps_l[idx][1]]], dtype=np.float32)
                 pt_r = np.array([[kps_r[idx][0], kps_r[idx][1]]], dtype=np.float32)
                 
-                # คำนวณ 3D (ได้ค่า 4D Homogeneous)
+                # คำนวณ 3D
                 pt_4d = cv2.triangulatePoints(P1, P2, pt_l.T, pt_r.T)
-                pt_3d_cam = pt_4d[:3] / pt_4d[3] # แปลงเป็น 3D พิกัดกล้องซ้าย
+                pt_3d_cam = pt_4d[:3] / pt_4d[3] 
                 
                 # นำไปอิงระนาบพื้นโลก
                 pt_world = R_floor_inv @ (pt_3d_cam - tvec_floor)
                 xw, yw, zw = pt_world.flatten()
                 
-                # 🌟 สลับและปรับทิศทางแกนสำหรับ Matplotlib 🌟
+                # เก็บค่า X, Y, Z (ปรับ Z ให้ชี้ขึ้นฟ้า)
                 pts_3d_world[idx] = [xw, yw, -zw]
 
-        # 3. วาดกราฟ 3D ทั้ง 3 มุมมอง
-        views = [
-            {"ax": ax1, "title": "Main 3D View", "elev": 15, "azim": 45},
-            {"ax": ax2, "title": "Top View (X-Y)", "elev": 90, "azim": -90},
-            {"ax": ax3, "title": "Side View (Y-Z)", "elev": 0, "azim": 0}
-        ]
-
-        for v in views:
-            ax = v["ax"]
-            ax.clear()
+        # ==========================================
+        # 3. วาดกราฟด้วย OpenCV ล้วนๆ (รับประกันความลื่น 60 FPS)
+        # ==========================================
+        # สร้างกระดานดำแนวยาว ขนาด 1200x400
+        canvas_3d = np.zeros((400, 1200, 3), dtype=np.uint8)
+        
+        def draw_view(pts, view_type, offset_x):
+            # ตีเส้นขอบหน้าต่างย่อย
+            cv2.rectangle(canvas_3d, (offset_x, 0), (offset_x + 400, 400), (50, 50, 50), 1)
             
-            # ตั้งค่าขอบเขตความกว้าง-ยาวของกราฟ
-            ax.set_xlim([-1.0, 1.0])  # แกน X (ซ้าย-ขวา) 
-            ax.set_ylim([-1.0, 1.0])  # แกน Y (หน้า-หลัง/ความลึก)
-            ax.set_zlim([-0.5, 2.0])  # แกน Z (ความสูง) เผื่อติดลบนิดหน่อย
-            
-            ax.set_xlabel('X (m)')
-            ax.set_ylabel('Depth Y (m)')
-            ax.set_zlabel('Height Z (m)')
-            ax.set_title(v["title"])
-            
-            # ปรับองศามุมกล้องของแต่ละแกน
-            ax.view_init(elev=v["elev"], azim=v["azim"])
+            # แปลง 3D เป็น 2D Pixel
+            def get_pt(pt_3d):
+                x, y, z = pt_3d
+                if view_type == 'front':   # มองจากด้านหน้า (X-Z)
+                    px = map_range(x, -1.0, 1.0, 50, 350)
+                    py = map_range(z, 2.0, -0.5, 50, 350) # Z สูงสุดอยู่ขอบบน
+                elif view_type == 'top':   # มองจากด้านบน (X-Y)
+                    px = map_range(x, -1.0, 1.0, 50, 350)
+                    py = map_range(y, 1.0, -1.0, 50, 350)
+                elif view_type == 'side':  # มองจากด้านข้าง (Y-Z)
+                    px = map_range(y, -1.0, 1.0, 50, 350)
+                    py = map_range(z, 2.0, -0.5, 50, 350)
+                return (px + offset_x, py)
 
-            # พล็อตจุดข้อต่อ
-            for idx, pt in pts_3d_world.items():
-                ax.scatter(pt[0], pt[1], pt[2], color='red', s=40)
-                # ใส่ตัวเลขกำกับจุดเฉพาะหน้าต่างหลัก 3D เพื่อไม่ให้จออื่นดูรกเกินไป
-                if ax == ax1:
-                    ax.text(pt[0], pt[1], pt[2], f'{idx}', fontsize=8)
-
-            # พล็อตเส้นเชื่อม (กระดูก)
+            # วาดเส้นกระดูก
             for (idx1, idx2) in SKELETON_CONNECTIONS:
-                if idx1 in pts_3d_world and idx2 in pts_3d_world:
-                    p1, p2 = pts_3d_world[idx1], pts_3d_world[idx2]
-                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='blue', linewidth=2)
+                if idx1 in pts and idx2 in pts:
+                    cv2.line(canvas_3d, get_pt(pts[idx1]), get_pt(pts[idx2]), (255, 100, 100), 2)
+                    
+            # วาดจุดข้อต่อ
+            for idx, pt in pts.items():
+                p2d = get_pt(pt)
+                cv2.circle(canvas_3d, p2d, 5, (0, 0, 255), -1)
+                # ใส่ตัวเลขเฉพาะจอหน้า
+                if view_type == 'front': 
+                    cv2.putText(canvas_3d, str(idx), (p2d[0]+5, p2d[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
-        plt.draw()
-        plt.pause(0.001)
+            # ใส่หัวข้อ
+            titles = {'front': "Front View (X-Z)", 'top': "Top View (X-Y)", 'side': "Side View (Y-Z)"}
+            cv2.putText(canvas_3d, titles[view_type], (offset_x + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        # วาดทั้ง 3 มุมมองลงไปบนกระดานดำ
+        draw_view(pts_3d_world, 'front', 0)
+        draw_view(pts_3d_world, 'top', 400)
+        draw_view(pts_3d_world, 'side', 800)
+
+        # นำภาพ 3D เสมือนขึ้นจอ
+        cv2.imshow(cv_3d_name, canvas_3d)
 
         # วิดีโอสตรีม
         display = cv2.hconcat([cv2.resize(frame_l, (400, 300)), cv2.resize(frame_r, (400, 300))])
         cv2.imshow(cv_window_name, display)
 
         # ==========================================
-        # เงื่อนไขการออกจากโปรแกรม (แก้ใหม่)
+        # เงื่อนไขการออกจากโปรแกรม
         # ==========================================
-        # 1. เช็คว่ากด Q หรือ ESC ไหม
-        if cv2.waitKey(1) & 0xFF in (ord('q'), 27): 
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord('q'), 27): 
             break
-            
-        # 2. เช็คว่าหน้าต่าง OpenCV โดนกดกากบาทปิดไปหรือยัง
         if cv2.getWindowProperty(cv_window_name, cv2.WND_PROP_VISIBLE) < 1:
             break
-            
-        # 3. เช็คว่าหน้าต่างกราฟ 3D (Matplotlib) โดนกดกากบาทปิดไปหรือยัง
-        if not plt.fignum_exists(fig.number):
+        if cv2.getWindowProperty(cv_3d_name, cv2.WND_PROP_VISIBLE) < 1:
             break
 
     cam_l.release(); cam_r.release()
     cv2.destroyAllWindows()
-    plt.ioff()
-    plt.close('all') # ปิดหน้าต่างกราฟทั้งหมดให้ชัวร์
 
 # ==========================================
 # 6. Main GUI Menu
